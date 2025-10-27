@@ -15,8 +15,29 @@ RIGHT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263]
 LEFT_BROW = [70, 63, 105, 66, 107, 55, 65]
 RIGHT_BROW = [336, 296, 334, 293, 300, 285, 295]
 LEFT_MOUTH_CORNER, RIGHT_MOUTH_CORNER = 61, 291
-STABLE_ANCHORS = [33, 263, 61, 291, 172, 148, 152, 377, 397]
-
+STABLE_ANCHORS = [33, 263, 61, 291]
+CHIN_REGION = [
+    152,
+    377,
+    400,
+    378,
+    379,
+    365,
+    397,
+    288,
+    361,
+    172,
+    58,
+    132,
+    93,
+    168,
+    417,
+    200,
+    428,
+    199,
+    175,
+    152,
+]
 
 mp_face_mesh = mp.solutions.face_mesh
 
@@ -179,7 +200,10 @@ def compute_droop(pts, side="left", severity=0.58, lateral=0.05):
             dst[i, 1] += base * 0.24 * bw
             dst[i, 0] += sign * lateral_px * 0.07 * bw
 
-
+    for i in CHIN_REGION:
+        if sel[i]:
+            dst[i, 1] += base * 0.18
+            dst[i, 0] += sign * lateral_px * 0.11
     return dst
 
 
@@ -200,6 +224,7 @@ def simulate(img_bgr, side="left", severity=0.58, lateral=0.05):
             + LEFT_BROW
             + RIGHT_BROW
             + STABLE_ANCHORS
+            + CHIN_REGION
         )
     )
     tris = triangulate_region(pts, region)
@@ -218,8 +243,8 @@ def build_interface():
         inputs=[
             gr.Image(type="numpy", label="Input Image"),
             gr.Radio(["left", "right"], value="left", label="Affected Side"),
-            gr.Slider(0.0, 1.0, value=0.62, label="Droop Intensity"),
-            gr.Slider(-0.5, 0.5, value=0.06, label="Mouth Stretch"),
+            gr.Slider(0.0, 1.0, value=0.62, label="Severity"),
+            gr.Slider(-0.5, 0.5, value=0.06, label="Lateral Pull"),
         ],
         outputs=gr.Image(type="numpy", label="Simulated Output"),
         title="Facial Paralysis Simulator (Production)",
