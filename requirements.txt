@@ -1,0 +1,5 @@
+gradio>=3.0
+opencv-python>=4.5
+mediapipe>=0.10
+numpy>=1.22
+scipy>=1.9
