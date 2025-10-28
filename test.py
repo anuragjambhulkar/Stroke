@@ -14,8 +14,8 @@ import gradio as gr
 
 # Try to convert /mnt/data/bg.pdf -> PNG data URL (first page). If fails, background will be empty.
 BG_DATA_URL = None
-PDF_PATH = Path("/mnt/data/bg.pdf")
-PNG_CACHE_PATH = Path("/mnt/data/bg.png")
+PDF_PATH = Path("./printlayout.jpg")
+PNG_CACHE_PATH = Path("./printlayout.jpg")
 try:
     if PDF_PATH.exists():
         try:
