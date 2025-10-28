@@ -1,5 +1,5 @@
 # app.py — Facial Paralysis Simulator (Final Production Build)
-# Updated to embed a PDF background (first page) as a PNG data-URL for the print layout.
+# Uses printlayout.jpg background and 3×2.3 capture frame ratio.
 
 import os
 import io
@@ -12,36 +12,16 @@ import mediapipe as mp
 from scipy.spatial import Delaunay
 import gradio as gr
 
-# Try to convert /mnt/data/bg.pdf -> PNG data URL (first page). If fails, background will be empty.
+# ---------------- Background image ----------------
+BG_PATH = Path("./printlayout.jpg")
+if not BG_PATH.exists():
+    print("⚠️ Warning: printlayout.jpg not found in current directory.")
 BG_DATA_URL = None
-PDF_PATH = Path("./printlayout.jpg")
-PNG_CACHE_PATH = Path("./printlayout.jpg")
 try:
-    if PDF_PATH.exists():
-        try:
-            import fitz  # PyMuPDF
-
-            doc = fitz.open(str(PDF_PATH))
-            page = doc.load_page(0)
-            zoom = 2  # improve quality
-            mat = fitz.Matrix(zoom, zoom)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            pix.save(str(PNG_CACHE_PATH))
-            # encode to base64 data-url
-            b64 = base64.b64encode(PNG_CACHE_PATH.read_bytes()).decode("ascii")
-            BG_DATA_URL = f"data:image/png;base64,{b64}"
-        except Exception:
-            # If PyMuPDF isn't available or conversion fails, but png exists, use it:
-            if PNG_CACHE_PATH.exists():
-                b64 = base64.b64encode(PNG_CACHE_PATH.read_bytes()).decode("ascii")
-                BG_DATA_URL = f"data:image/png;base64,{b64}"
-            else:
-                BG_DATA_URL = None
-    else:
-        BG_DATA_URL = None
+    b64 = base64.b64encode(BG_PATH.read_bytes()).decode("ascii")
+    BG_DATA_URL = f"data:image/jpeg;base64,{b64}"
 except Exception:
     BG_DATA_URL = None
-
 
 # ---------------- Landmark groups ----------------
 LIPS_OUTER = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291]
@@ -85,7 +65,7 @@ face_mesh = mp_face_mesh.FaceMesh(
 )
 
 
-# ---------------- Landmarks ----------------
+# ---------------- Landmark extraction ----------------
 def landmarks_from_image_rgb(img_rgb):
     h, w = img_rgb.shape[:2]
     res = face_mesh.process(img_rgb)
@@ -127,7 +107,6 @@ def triangulate_region(points, region_indices):
         dtype=np.int32,
     )
 
-
 def warp_triangle(src_img, src_tri, dst_tri):
     x, y, w, h = cv2.boundingRect(np.array(dst_tri, dtype=np.int32))
     if w <= 0 or h <= 0:
@@ -146,7 +125,6 @@ def warp_triangle(src_img, src_tri, dst_tri):
     cv2.fillConvexPoly(mask, np.int32(dst_shift), 255)
     return warped, mask, (x, y, w, h)
 
-
 def piecewise_warp(src_img, src_pts, dst_pts, triangles, region_mask):
     h, w = src_img.shape[:2]
     accum = np.zeros((h, w, 3), dtype=np.float32)
@@ -164,12 +142,11 @@ def piecewise_warp(src_img, src_pts, dst_pts, triangles, region_mask):
     final_warped = src_img.astype(np.float32)
     np.copyto(final_warped, averaged, where=tri_mask)
     alpha = (region_mask.astype(np.float32) / 255.0)[:, :, None]
-    blended_float = final_warped * alpha + src_img.astype(np.float32) * (1.0 - alpha)
-    blended_final = np.clip(blended_float, 0, 255).astype(np.uint8)
-    return blended_final
+    blended = final_warped * alpha + src_img.astype(np.float32) * (1.0 - alpha)
+    return np.clip(blended, 0, 255).astype(np.uint8)
 
 
-# ---------------- Geometry ----------------
+# ---------------- Geometry deformation ----------------
 def compute_droop(pts, side="left", severity=0.58, lateral=0.05):
     dst = pts.astype(np.float32).copy()
     cx = np.mean(pts[:, 0])
@@ -229,7 +206,7 @@ def compute_droop(pts, side="left", severity=0.58, lateral=0.05):
     return dst
 
 
-# ---------------- Main processing ----------------
+# ---------------- Main simulation ----------------
 def simulate(img_bgr, side="left", severity=0.58, lateral=0.05):
     if img_bgr is None:
         return None
@@ -257,140 +234,126 @@ def simulate(img_bgr, side="left", severity=0.58, lateral=0.05):
     result = cv2.bilateralFilter(result, d=4, sigmaColor=40, sigmaSpace=40)
     return result
 
+# ---------------- Report Generation ----------------
+def generate_report(images):
+    if images is None:
+        return None
+    original_img, simulated_img = images
+    
+    try:
+        script_dir = Path(__file__).parent
+        bg_path = script_dir / "printlayout.jpg"
+        bg_img = cv2.imread(str(bg_path))
+    except NameError:
+        bg_img = cv2.imread("printlayout.jpg")
+
+    if bg_img is None:
+        print("⚠️ Could not load printlayout.jpg.")
+        return None
+    bg_h, bg_w, _ = bg_img.shape
+
+    # Resize faces to fit inside white boxes (3x2.3 ratio)
+    target_h = int(bg_h * 0.48)
+    target_w = int(target_h * (2.3 / 3.0))
+
+    def prepare_face(img):
+        # This function resizes the full image and ensures it's 3-channel BGR
+        img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        return cv2.resize(img_bgr, (target_w, target_h))
+
+    orig = prepare_face(original_img)
+    sim = prepare_face(simulated_img)
+
+    x_left = int(bg_w * 0.17)
+    x_right = int(bg_w * 0.56)
+    y_top = int(bg_h * 0.25)
+
+    # Paste the resized full images directly
+    bg_img[y_top : y_top + target_h, x_left : x_left + target_w] = orig
+    bg_img[y_top : y_top + target_h, x_right : x_right + target_w] = sim
+
+    return cv2.cvtColor(bg_img, cv2.COLOR_BGR2RGB)
+
 
 # ---------------- Gradio Interface ----------------
 def build_interface():
-    # Build print CSS; if BG_DATA_URL exists, embed it as background for print layout.
-    bg_css_part = ""
-    if BG_DATA_URL:
-        # background anchored and sized to cover, behind the content
-        bg_css_part = f"""
-        #print-layout {{
-            background-image: url("{BG_DATA_URL}");
-            background-repeat: no-repeat;
-            background-size: cover;
-            background-position: center center;
-            padding: 1cm;
-        }}
-        #print-container {{
-            display: flex;
-            justify-content: space-around;
-            align-items: center;
-            gap: 1cm;
-            width: 100%;
-        }}
-        #print-container img {{
-            max-width: 48%;
-            height: auto;
-            border: 1px solid rgba(0,0,0,0.12);
-            box-shadow: 0 0 8px rgba(0,0,0,0.08);
-            background: transparent;
-        }}
-        """
-    else:
-        bg_css_part = """
-        #print-layout { padding: 1cm; }
-        #print-container { display:flex; justify-content: space-around; align-items:center; gap:1cm; width:100%; }
-        #print-container img { max-width:48%; height:auto; border:1px solid rgba(0,0,0,0.12); }
-        """
-
-    print_css = f"""
-    @media print {{
-      body * {{ visibility: hidden; }}
-      #print-layout, #print-layout * {{ visibility: visible; }}
-      #print-layout {{ position: absolute; left: 0; top: 0; width: 100%; }}
-      @page {{ size: A5 landscape; margin: 0; }}
-      {bg_css_part}
-      h2 {{ text-align: center; width: 100%; }}
-    }}
+    print_css = """
+    @media print {
+      body > * { visibility: hidden; }
+      #popup-view, #popup-view * { visibility: visible; }
+      #popup-view { position: absolute; left: 0; top: 0; width: 100%; }
+      @page { size: auto; margin: 0; }
+    }
     """
-
     with gr.Blocks(theme=gr.themes.Default(primary_hue="blue"), css=print_css) as app:
         image_state = gr.State(None)
 
-        gr.Markdown(
-            "# Automatic Facial Paralysis Simulator\n"
-            "Look into the camera and click 'Capture' to freeze the frame and see the simulation."
-        )
+        with gr.Column(elem_id="main-view") as main_view:
+            gr.Markdown(
+                "# Automatic Facial Paralysis Simulator\n"
+                "Look into the camera and click **Generate** to simulate facial paralysis effects."
+            )
+            status_display = gr.Markdown("")
+            with gr.Row(equal_height=True):
+                input_display = gr.Image(
+                    sources=["webcam"],
+                    type="numpy",
+                    label="Input (3×2.3 frame)",
+                    height=520,
+                    width=400,
+                    mirror_webcam=True,
+                )
+                output_display = gr.Image(
+                    type="numpy",
+                    label="Simulated Output (Aligned to print layout)",
+                    height=520,
+                    width=400,
+                )
+            with gr.Row():
+                capture_button = gr.Button("Generate")
+                report_button = gr.Button("Take a look", visible=False)
 
-        status_display = gr.Markdown("")
-
-        with gr.Row(equal_height=True):
-            input_display = gr.Image(sources=["webcam"], type="numpy", label="Input")
-            output_display = gr.Image(type="numpy", label="Simulated Output")
-
-        with gr.Row():
-            capture_button = gr.Button("Capture")
-            print_button = gr.Button("Print Report", visible=False)
-            reset_button = gr.Button("New Simulation")
-
-        # Hidden components for printing
-        with gr.Column(elem_id="print-layout", visible=False):
-            gr.Markdown("## Facial Paralysis Simulation Report")
-            with gr.Row(elem_id="print-container"):
-                print_input_img = gr.Image(label="Original")
-                print_output_img = gr.Image(label="Simulated")
+        with gr.Column(visible=False, elem_id="popup-view") as popup_view:
+            gr.Markdown("## Report Preview")
+            report_image_display = gr.Image(label="Final Report", interactive=False)
+            with gr.Row():
+                print_button_popup = gr.Button("Print")
+                close_button_popup = gr.Button("Close")
 
         def capture_and_simulate(frame):
             if frame is None:
-                return (
-                    gr.update(),
-                    gr.update(),
-                    gr.update(visible=False),
-                    None,
-                    "Please wait for webcam to start.",
-                )
+                return (gr.update(), gr.update(), gr.update(visible=False), None, "Please wait for webcam.")
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            simulated_bgr = simulate(frame_bgr, side="right", severity=0.62, lateral=0.06)
+            if simulated_bgr is None or np.array_equal(frame_bgr, simulated_bgr):
+                return (frame, None, gr.update(visible=False), None, "⚠️ No face detected. Try again.")
+            simulated_rgb = cv2.cvtColor(simulated_bgr, cv2.COLOR_BGR2RGB)
+            return (frame, simulated_rgb, gr.update(visible=True), (frame, simulated_rgb), "✅ Simulation complete!")
 
-            simulated = simulate(frame, side="right", severity=0.62, lateral=0.06)
+        def show_popup(images):
+            report_img = generate_report(images)
+            return gr.update(visible=False), gr.update(visible=True), report_img
 
-            # If no face detected, simulate returns original frame — detect that:
-            if simulated is None or np.array_equal(frame, simulated):
-                return (
-                    frame,
-                    None,
-                    gr.update(visible=False),
-                    None,
-                    "⚠️ **No face detected.** Please position your face in the center of the frame and try again.",
-                )
-
-            images_for_print = (frame, simulated)
-            return (
-                frame,
-                simulated,
-                gr.update(visible=True),
-                images_for_print,
-                "✅ **Simulation complete!** You can now print the report.",
-            )
+        def close_popup():
+            return gr.update(visible=True), gr.update(visible=False), None
 
         capture_button.click(
             fn=capture_and_simulate,
             inputs=[input_display],
-            outputs=[
-                input_display,
-                output_display,
-                print_button,
-                image_state,
-                status_display,
-            ],
+            outputs=[input_display, output_display, report_button, image_state, status_display],
         )
-
-        def prepare_for_print(images):
-            if images is None:
-                return gr.update(), gr.update()
-            # Return the original + simulated images to the hidden print-image components
-            return images[0], images[1]
-
-
-
-        # We need to wire the print button to update the hidden images and then trigger browser print via JS.
-        # Because Gradio's click chaining can be a little finicky, we bind a separate click that takes the stored state:
-        print_button.click(
-            fn=prepare_for_print,
+        report_button.click(
+            fn=show_popup,
             inputs=[image_state],
-            outputs=[print_input_img, print_output_img],
-        ).then(fn=None, js="() => { window.print(); }")
-
-        reset_button.click(js="() => { window.location.reload(); }")
+            outputs=[main_view, popup_view, report_image_display],
+        )
+        close_button_popup.click(
+            fn=close_popup,
+            inputs=None,
+            outputs=[main_view, popup_view, report_image_display],
+        )
+        print_button_popup.click(fn=None, js="() => { window.print(); }")
+       
 
     return app
 
