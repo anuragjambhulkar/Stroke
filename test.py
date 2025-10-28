@@ -1,10 +1,46 @@
 # app.py — Facial Paralysis Simulator (Final Production Build)
+# Updated to embed a PDF background (first page) as a PNG data-URL for the print layout.
+
+import os
+import io
+import base64
+from pathlib import Path
 
 import cv2
 import numpy as np
 import mediapipe as mp
 from scipy.spatial import Delaunay
 import gradio as gr
+
+# Try to convert /mnt/data/bg.pdf -> PNG data URL (first page). If fails, background will be empty.
+BG_DATA_URL = None
+PDF_PATH = Path("/mnt/data/bg.pdf")
+PNG_CACHE_PATH = Path("/mnt/data/bg.png")
+try:
+    if PDF_PATH.exists():
+        try:
+            import fitz  # PyMuPDF
+
+            doc = fitz.open(str(PDF_PATH))
+            page = doc.load_page(0)
+            zoom = 2  # improve quality
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            pix.save(str(PNG_CACHE_PATH))
+            # encode to base64 data-url
+            b64 = base64.b64encode(PNG_CACHE_PATH.read_bytes()).decode("ascii")
+            BG_DATA_URL = f"data:image/png;base64,{b64}"
+        except Exception:
+            # If PyMuPDF isn't available or conversion fails, but png exists, use it:
+            if PNG_CACHE_PATH.exists():
+                b64 = base64.b64encode(PNG_CACHE_PATH.read_bytes()).decode("ascii")
+                BG_DATA_URL = f"data:image/png;base64,{b64}"
+            else:
+                BG_DATA_URL = None
+    else:
+        BG_DATA_URL = None
+except Exception:
+    BG_DATA_URL = None
 
 
 # ---------------- Landmark groups ----------------
@@ -18,13 +54,33 @@ RIGHT_BROW = [336, 296, 334, 293, 300, 285, 295]
 LEFT_MOUTH_CORNER, RIGHT_MOUTH_CORNER = 61, 291
 STABLE_ANCHORS = [33, 263, 61, 291]
 CHIN_REGION = [
-    152, 377, 400, 378, 379, 365, 397, 288, 361, 172, 58, 132, 93, 168,
-    417, 200, 428, 199, 175, 152,
+    152,
+    377,
+    400,
+    378,
+    379,
+    365,
+    397,
+    288,
+    361,
+    172,
+    58,
+    132,
+    93,
+    168,
+    417,
+    200,
+    428,
+    199,
+    175,
+    152,
 ]
 
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(
-    static_image_mode=True, max_num_faces=1, refine_landmarks=True,
+    static_image_mode=True,
+    max_num_faces=1,
+    refine_landmarks=True,
     min_detection_confidence=0.5,
 )
 
@@ -71,12 +127,15 @@ def triangulate_region(points, region_indices):
         dtype=np.int32,
     )
 
+
 def warp_triangle(src_img, src_tri, dst_tri):
     x, y, w, h = cv2.boundingRect(np.array(dst_tri, dtype=np.int32))
-    if w <= 0 or h <= 0: return None, None, (x, y, w, h)
+    if w <= 0 or h <= 0:
+        return None, None, (x, y, w, h)
     sx, sy, sw, sh = cv2.boundingRect(np.array(src_tri, dtype=np.int32))
     src_crop = src_img[sy : sy + sh, sx : sx + sw]
-    if src_crop.size == 0: return None, None, (x, y, w, h)
+    if src_crop.size == 0:
+        return None, None, (x, y, w, h)
     src_shift = np.float32([[src_tri[i][0] - sx, src_tri[i][1] - sy] for i in range(3)])
     dst_shift = np.float32([[dst_tri[i][0] - x, dst_tri[i][1] - y] for i in range(3)])
     M = cv2.getAffineTransform(src_shift, dst_shift)
@@ -87,13 +146,15 @@ def warp_triangle(src_img, src_tri, dst_tri):
     cv2.fillConvexPoly(mask, np.int32(dst_shift), 255)
     return warped, mask, (x, y, w, h)
 
+
 def piecewise_warp(src_img, src_pts, dst_pts, triangles, region_mask):
     h, w = src_img.shape[:2]
     accum = np.zeros((h, w, 3), dtype=np.float32)
     counts = np.zeros((h, w, 1), dtype=np.float32)
     for tri in triangles:
         wp, mk, (x, y, ww, hh) = warp_triangle(src_img, src_pts[tri], dst_pts[tri])
-        if wp is None: continue
+        if wp is None:
+            continue
         m = mk[:, :, None].astype(np.float32) / 255.0
         accum[y : y + hh, x : x + ww] += wp.astype(np.float32) * m
         counts[y : y + hh, x : x + ww] += m[:, :, :1]
@@ -139,13 +200,20 @@ def compute_droop(pts, side="left", severity=0.58, lateral=0.05):
     ecy = np.mean(pts[eyes, 1])
     span = max(1e-6, np.max(pts[eyes, 0]) - np.min(pts[eyes, 0]))
     for i in eyes:
-        if not sel[i]: continue
-        lateralness = (((pts[i, 0] - np.min(pts[eyes, 0])) / span) if sign > 0 else ((np.max(pts[eyes, 0]) - pts[i, 0]) / span))
+        if not sel[i]:
+            continue
+        lateralness = (
+            ((pts[i, 0] - np.min(pts[eyes, 0])) / span)
+            if sign > 0
+            else ((np.max(pts[eyes, 0]) - pts[i, 0]) / span)
+        )
         lateralness = float(np.clip(lateralness, 0.0, 1.0))
         center_w = 0.4 + 0.6 * (1 - abs(pts[i, 0] - ecx) / span)
         w = 0.45 * center_w + 0.55 * lateralness
-        if pts[i, 1] < ecy: dst[i, 1] += base * 0.40 * w
-        else: dst[i, 1] -= base * 0.14 * w
+        if pts[i, 1] < ecy:
+            dst[i, 1] += base * 0.40 * w
+        else:
+            dst[i, 1] -= base * 0.14 * w
     mid_x = cx
     max_side = max(1e-6, np.max(np.abs(pts[brows, 0] - mid_x)))
     for i in brows:
@@ -163,14 +231,27 @@ def compute_droop(pts, side="left", severity=0.58, lateral=0.05):
 
 # ---------------- Main processing ----------------
 def simulate(img_bgr, side="left", severity=0.58, lateral=0.05):
-    if img_bgr is None: return None
+    if img_bgr is None:
+        return None
     rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     pts = landmarks_from_image_rgb(rgb)
-    if pts is None: return img_bgr
+    if pts is None:
+        return img_bgr
     dst_pts = compute_droop(pts, side, severity, lateral)
-    region = sorted(set(LIPS_REGION + LEFT_EYE + RIGHT_EYE + LEFT_BROW + RIGHT_BROW + STABLE_ANCHORS + CHIN_REGION))
+    region = sorted(
+        set(
+            LIPS_REGION
+            + LEFT_EYE
+            + RIGHT_EYE
+            + LEFT_BROW
+            + RIGHT_BROW
+            + STABLE_ANCHORS
+            + CHIN_REGION
+        )
+    )
     tris = triangulate_region(pts, region)
-    if tris.size == 0: return img_bgr
+    if tris.size == 0:
+        return img_bgr
     mask = convex_mask_from_indices(img_bgr.shape[:2], pts, region, feather_px=15)
     result = piecewise_warp(img_bgr, pts, dst_pts, tris, mask)
     result = cv2.bilateralFilter(result, d=4, sigmaColor=40, sigmaSpace=40)
@@ -179,17 +260,51 @@ def simulate(img_bgr, side="left", severity=0.58, lateral=0.05):
 
 # ---------------- Gradio Interface ----------------
 def build_interface():
-    print_css = """
-    @media print {
-      body * { visibility: hidden; }
-      #print-layout, #print-layout * { visibility: visible; }
-      #print-layout { position: absolute; left: 0; top: 0; width: 100%; padding: 1cm; }
-      @page { size: A5 landscape; }
-      #print-container { display: flex; justify-content: space-around; align-items: center; gap: 1cm; }
-      #print-container img { max-width: 100%; height: auto; border: 1px solid #ccc; }
-      h2 { text-align: center; width: 100%; }
-    }
+    # Build print CSS; if BG_DATA_URL exists, embed it as background for print layout.
+    bg_css_part = ""
+    if BG_DATA_URL:
+        # background anchored and sized to cover, behind the content
+        bg_css_part = f"""
+        #print-layout {{
+            background-image: url("{BG_DATA_URL}");
+            background-repeat: no-repeat;
+            background-size: cover;
+            background-position: center center;
+            padding: 1cm;
+        }}
+        #print-container {{
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            gap: 1cm;
+            width: 100%;
+        }}
+        #print-container img {{
+            max-width: 48%;
+            height: auto;
+            border: 1px solid rgba(0,0,0,0.12);
+            box-shadow: 0 0 8px rgba(0,0,0,0.08);
+            background: transparent;
+        }}
+        """
+    else:
+        bg_css_part = """
+        #print-layout { padding: 1cm; }
+        #print-container { display:flex; justify-content: space-around; align-items:center; gap:1cm; width:100%; }
+        #print-container img { max-width:48%; height:auto; border:1px solid rgba(0,0,0,0.12); }
+        """
+
+    print_css = f"""
+    @media print {{
+      body * {{ visibility: hidden; }}
+      #print-layout, #print-layout * {{ visibility: visible; }}
+      #print-layout {{ position: absolute; left: 0; top: 0; width: 100%; }}
+      @page {{ size: A5 landscape; margin: 0; }}
+      {bg_css_part}
+      h2 {{ text-align: center; width: 100%; }}
+    }}
     """
+
     with gr.Blocks(theme=gr.themes.Default(primary_hue="blue"), css=print_css) as app:
         image_state = gr.State(None)
 
@@ -218,55 +333,63 @@ def build_interface():
 
         def capture_and_simulate(frame):
             if frame is None:
-                return {
-                    status_display: "Please wait for webcam to start.",
-                    print_button: gr.update(visible=False)
-                }
-            
+                return (
+                    gr.update(),
+                    gr.update(),
+                    gr.update(visible=False),
+                    None,
+                    "Please wait for webcam to start.",
+                )
+
             simulated = simulate(frame, side="right", severity=0.62, lateral=0.06)
-            
-            if np.array_equal(frame, simulated):
-                return {
-                    input_display: frame,
-                    output_display: None,
-                    print_button: gr.update(visible=False),
-                    status_display: "⚠️ **No face detected.** Please position your face in the center of the frame and try again."
-                }
+
+            # If no face detected, simulate returns original frame — detect that:
+            if simulated is None or np.array_equal(frame, simulated):
+                return (
+                    frame,
+                    None,
+                    gr.update(visible=False),
+                    None,
+                    "⚠️ **No face detected.** Please position your face in the center of the frame and try again.",
+                )
 
             images_for_print = (frame, simulated)
-            return {
-                input_display: frame,
-                output_display: simulated,
-                print_button: gr.update(visible=True),
-                image_state: images_for_print,
-                status_display: "✅ **Simulation complete!** You can now print the report."
-            }
+            return (
+                frame,
+                simulated,
+                gr.update(visible=True),
+                images_for_print,
+                "✅ **Simulation complete!** You can now print the report.",
+            )
 
         capture_button.click(
             fn=capture_and_simulate,
             inputs=[input_display],
-            outputs=[input_display, output_display, print_button, image_state, status_display]
+            outputs=[
+                input_display,
+                output_display,
+                print_button,
+                image_state,
+                status_display,
+            ],
         )
 
         def prepare_for_print(images):
             if images is None:
-                return {
-                    print_input_img: None,
-                    print_output_img: None
-                }
-            return {
-                print_input_img: images[0],
-                print_output_img: images[1]
-            }
+                return gr.update(), gr.update()
+            # Return the original + simulated images to the hidden print-image components
+            return images[0], images[1]
 
+
+
+        # We need to wire the print button to update the hidden images and then trigger browser print via JS.
+        # Because Gradio's click chaining can be a little finicky, we bind a separate click that takes the stored state:
         print_button.click(
             fn=prepare_for_print,
             inputs=[image_state],
-            outputs=[print_input_img, print_output_img]
-        ).then(
-            fn=None, js="() => { window.print(); }"
-        )
-        
+            outputs=[print_input_img, print_output_img],
+        ).then(fn=None, js="() => { window.print(); }")
+
         reset_button.click(js="() => { window.location.reload(); }")
 
     return app
