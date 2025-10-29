@@ -119,7 +119,7 @@ def warp_triangle(src_img, src_tri, dst_tri):
     dst_shift = np.float32([[dst_tri[i][0] - x, dst_tri[i][1] - y] for i in range(3)])
     M = cv2.getAffineTransform(src_shift, dst_shift)
     warped = cv2.warpAffine(
-        src_crop, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101
+        src_crop, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REFLECT_101
     )
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillConvexPoly(mask, np.int32(dst_shift), 255)
@@ -229,7 +229,7 @@ def simulate(img_bgr, side="left", severity=0.58, lateral=0.05):
     tris = triangulate_region(pts, region)
     if tris.size == 0:
         return img_bgr
-    mask = convex_mask_from_indices(img_bgr.shape[:2], pts, region, feather_px=15)
+    mask = convex_mask_from_indices(img_bgr.shape[:2], pts, region, feather_px=35)
     result = piecewise_warp(img_bgr, pts, dst_pts, tris, mask)
     result = cv2.bilateralFilter(result, d=4, sigmaColor=40, sigmaSpace=40)
     return result
@@ -253,7 +253,7 @@ def generate_report(images):
     bg_h, bg_w, _ = bg_img.shape
 
     # Resize faces to fit inside white boxes (3x2.3 ratio)
-    target_h = int(bg_h * 0.48)
+    target_h = int(bg_h * 0.50)
     target_w = int(target_h * (2.3 / 3.0))
 
     def prepare_face(img):
@@ -306,12 +306,11 @@ def build_interface():
                 output_display = gr.Image(
                     type="numpy",
                     label="Simulated Output (Aligned to print layout)",
-                    height=520,
-                    width=400,
+                    height=624,
+                    width=480,
                 )
             with gr.Row():
                 capture_button = gr.Button("Generate")
-                report_button = gr.Button("Take a look", visible=False)
 
         with gr.Column(visible=False, elem_id="popup-view") as popup_view:
             gr.Markdown("## Report Preview")
@@ -322,13 +321,13 @@ def build_interface():
 
         def capture_and_simulate(frame):
             if frame is None:
-                return (gr.update(), gr.update(), gr.update(visible=False), None, "Please wait for webcam.")
+                return (gr.update(), gr.update(), None, "Please wait for webcam.")
             frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             simulated_bgr = simulate(frame_bgr, side="right", severity=0.62, lateral=0.06)
             if simulated_bgr is None or np.array_equal(frame_bgr, simulated_bgr):
-                return (frame, None, gr.update(visible=False), None, "⚠️ No face detected. Try again.")
+                return (frame, None, None, "⚠️ No face detected. Try again.")
             simulated_rgb = cv2.cvtColor(simulated_bgr, cv2.COLOR_BGR2RGB)
-            return (frame, simulated_rgb, gr.update(visible=True), (frame, simulated_rgb), "✅ Simulation complete!")
+            return (frame, simulated_rgb, (frame, simulated_rgb), "✅ Simulation complete!")
 
         def show_popup(images):
             report_img = generate_report(images)
@@ -340,9 +339,8 @@ def build_interface():
         capture_button.click(
             fn=capture_and_simulate,
             inputs=[input_display],
-            outputs=[input_display, output_display, report_button, image_state, status_display],
-        )
-        report_button.click(
+            outputs=[input_display, output_display, image_state, status_display],
+        ).then(
             fn=show_popup,
             inputs=[image_state],
             outputs=[main_view, popup_view, report_image_display],
