@@ -166,15 +166,21 @@ def compute_droop(pts, side="left", severity=0.58, lateral=0.05):
     lips = np.array(LIPS_REGION)
     mcx = np.mean(pts[lips, 0])
     maxdx = np.max(np.abs(pts[lips, 0] - mcx)) + 1e-6
-    for i in lips:
+
+    # Process general lip points, excluding the corner which gets special handling
+    lips_no_corner = [p for p in lips if p != mouth_corner]
+    for i in lips_no_corner:
         if sel[i]:
             dx = abs(pts[i, 0] - mcx)
-            w = 0.25 + 0.75 * (dx / maxdx)
+            # Use a power curve for a more natural, curved droop
+            w = 0.25 + 0.75 * ((dx / maxdx) ** 1.5)
             dst[i, 1] += base * (0.8 + 0.2 * w) * w
             dst[i, 0] += sign * lateral_px * w
+
+    # Apply a stronger, specific droop just to the mouth corner
     if sel[mouth_corner]:
-        dst[mouth_corner, 1] += base * 1.2
-        dst[mouth_corner, 0] += sign * lateral_px * 0.9
+        dst[mouth_corner, 1] += base * 1.1
+        dst[mouth_corner, 0] += sign * lateral_px * 0.8
     ecx = np.mean(pts[eyes, 0])
     ecy = np.mean(pts[eyes, 1])
     span = max(1e-6, np.max(pts[eyes, 0]) - np.min(pts[eyes, 0]))
@@ -252,7 +258,7 @@ def generate_report(images):
 
     # --- FINAL portrait placement (based on your layout) ---
     frame_boxes = {
-        "left":  {"x": 300,  "y": 325, "w": 690, "h": 890},
+        "left": {"x": 300, "y": 325, "w": 690, "h": 890},
         "right": {"x": 1115, "y": 325, "w": 690, "h": 890},
     }
 
@@ -267,14 +273,13 @@ def generate_report(images):
         if aspect_img > aspect_box:
             new_w = int(ih * aspect_box)
             x0 = (iw - new_w) // 2
-            img_bgr = img_bgr[:, x0:x0 + new_w]
+            img_bgr = img_bgr[:, x0 : x0 + new_w]
         else:
             # pad vertically (black)
             pad = int(((iw / aspect_box) - ih) / 2)
             if pad > 0:
                 img_bgr = cv2.copyMakeBorder(
-                    img_bgr, pad, pad, 0, 0,
-                    cv2.BORDER_CONSTANT, value=[0, 0, 0]
+                    img_bgr, pad, pad, 0, 0, cv2.BORDER_CONSTANT, value=[0, 0, 0]
                 )
 
         # Step 2: scale image a bit smaller (no white border)
@@ -287,14 +292,13 @@ def generate_report(images):
         y_offset = box["y"] + (box["h"] - new_h) // 2
 
         # Step 4: overlay the shrunken image directly on top of the layout
-        bg_img[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+        bg_img[y_offset : y_offset + new_h, x_offset : x_offset + new_w] = resized
 
     # Apply both
     fit_portrait_crop(original_img, frame_boxes["left"], scale=0.93)
     fit_portrait_crop(simulated_img, frame_boxes["right"], scale=0.93)
 
     return cv2.cvtColor(bg_img, cv2.COLOR_BGR2RGB)
-
 
 
 # ---------------- Gradio UI ----------------
@@ -360,7 +364,15 @@ def build_interface():
             return gr.update(visible=False), gr.update(visible=True), report_img
 
         def reset_app():
-            return gr.update(visible=True), gr.update(visible=False), None
+            return (
+                gr.update(visible=True),  # Show main view again
+                gr.update(visible=False),  # Hide popup (final report) view
+                None,  # Clear report image
+                None,  # Clear webcam image
+                None,  # Clear simulated image
+                None,  # Clear state
+                "",  # Clear status message
+            )
 
         capture_button.click(
             fn=capture_and_simulate,
@@ -374,7 +386,16 @@ def build_interface():
 
         print_button.click(fn=None, js="() => { window.print(); }")
         reset_button.click(
-            fn=reset_app, outputs=[main_view, popup_view, report_image_display]
+            fn=reset_app,
+            outputs=[
+                main_view,
+                popup_view,
+                report_image_display,
+                input_display,
+                output_display,
+                image_state,
+                status_display,
+            ],
         )
 
     return app
