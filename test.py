@@ -1,11 +1,10 @@
-# app.py — Facial Paralysis Simulator (Final Production Build)
+# app.py — Facial Paralysis Simulator (Final Production Build — aspect-safe)
 # Uses printlayout.jpg background and 3×2.3 capture frame ratio.
+# Preserves all your simulation logic and fixes vertical-stretch.
 
 import os
-import io
 import base64
 from pathlib import Path
-
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -73,7 +72,8 @@ def landmarks_from_image_rgb(img_rgb):
         return None
     lm = res.multi_face_landmarks[0].landmark
     return np.array(
-        [[int(p.x * w + 0.5), int(p.y * h + 0.5)] for p in lm], dtype=np.int32
+        [[int(p.x * w + 0.5), int(p.y * h + 0.5)] for p in lm],
+        dtype=np.int32,
     )
 
 
@@ -107,6 +107,7 @@ def triangulate_region(points, region_indices):
         dtype=np.int32,
     )
 
+
 def warp_triangle(src_img, src_tri, dst_tri):
     x, y, w, h = cv2.boundingRect(np.array(dst_tri, dtype=np.int32))
     if w <= 0 or h <= 0:
@@ -124,6 +125,7 @@ def warp_triangle(src_img, src_tri, dst_tri):
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillConvexPoly(mask, np.int32(dst_shift), 255)
     return warped, mask, (x, y, w, h)
+
 
 def piecewise_warp(src_img, src_pts, dst_pts, triangles, region_mask):
     h, w = src_img.shape[:2]
@@ -234,106 +236,130 @@ def simulate(img_bgr, side="left", severity=0.58, lateral=0.05):
     result = cv2.bilateralFilter(result, d=4, sigmaColor=40, sigmaSpace=40)
     return result
 
-# ---------------- Report Generation ----------------
+
+# ---------------- Report Generation (ASPECT-SAFE) ----------------
 def generate_report(images):
-    if images is None:
+    if not images or images[0] is None or images[1] is None:
         return None
+
     original_img, simulated_img = images
-    
-    try:
-        script_dir = Path(__file__).parent
-        bg_path = script_dir / "printlayout.jpg"
-        bg_img = cv2.imread(str(bg_path))
-    except NameError:
-        bg_img = cv2.imread("printlayout.jpg")
+    bg_path = Path("printlayout.jpg")
 
+    # Load background
+    bg_img = cv2.imread(str(bg_path)) if bg_path.exists() else None
     if bg_img is None:
-        print("⚠️ Could not load printlayout.jpg.")
-        return None
-    bg_h, bg_w, _ = bg_img.shape
+        bg_img = np.ones((1500, 2100, 3), dtype=np.uint8) * 255
 
-    # Resize faces to fit inside white boxes (3x2.3 ratio)
-    target_h = int(bg_h * 0.50)
-    target_w = int(target_h * (2.3 / 3.0))
+    # --- FINAL portrait placement (based on your layout) ---
+    frame_boxes = {
+        "left":  {"x": 300,  "y": 325, "w": 690, "h": 890},
+        "right": {"x": 1115, "y": 325, "w": 690, "h": 890},
+    }
 
-    def prepare_face(img):
-        # This function resizes the full image and ensures it's 3-channel BGR
-        img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        return cv2.resize(img_bgr, (target_w, target_h))
+    def fit_portrait_crop(img_rgb, box, scale=0.93):
+        """Crop image to portrait and scale down slightly to expose border."""
+        img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        ih, iw = img_bgr.shape[:2]
+        aspect_img = iw / ih
+        aspect_box = box["w"] / box["h"]
 
-    orig = prepare_face(original_img)
-    sim = prepare_face(simulated_img)
+        # Step 1: crop horizontally if needed
+        if aspect_img > aspect_box:
+            new_w = int(ih * aspect_box)
+            x0 = (iw - new_w) // 2
+            img_bgr = img_bgr[:, x0:x0 + new_w]
+        else:
+            # pad vertically (black)
+            pad = int(((iw / aspect_box) - ih) / 2)
+            if pad > 0:
+                img_bgr = cv2.copyMakeBorder(
+                    img_bgr, pad, pad, 0, 0,
+                    cv2.BORDER_CONSTANT, value=[0, 0, 0]
+                )
 
-    x_left = int(bg_w * 0.17)
-    x_right = int(bg_w * 0.56)
-    y_top = int(bg_h * 0.25)
+        # Step 2: scale image a bit smaller (no white border)
+        new_w = int(box["w"] * scale)
+        new_h = int(box["h"] * scale)
+        resized = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-    # Paste the resized full images directly
-    bg_img[y_top : y_top + target_h, x_left : x_left + target_w] = orig
-    bg_img[y_top : y_top + target_h, x_right : x_right + target_w] = sim
+        # Step 3: compute offsets for centering inside colored frame
+        x_offset = box["x"] + (box["w"] - new_w) // 2
+        y_offset = box["y"] + (box["h"] - new_h) // 2
+
+        # Step 4: overlay the shrunken image directly on top of the layout
+        bg_img[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+
+    # Apply both
+    fit_portrait_crop(original_img, frame_boxes["left"], scale=0.93)
+    fit_portrait_crop(simulated_img, frame_boxes["right"], scale=0.93)
 
     return cv2.cvtColor(bg_img, cv2.COLOR_BGR2RGB)
 
 
-# ---------------- Gradio Interface ----------------
+
+# ---------------- Gradio UI ----------------
 def build_interface():
-    print_css = """
+    css = """
+    footer, header, [data-testid*='toolbar'], [class*='image-toolbar'], .icon-button {
+        display: none !important;
+    }
+    .gradio-container { background: #fff !important; }
     @media print {
-      body > * { visibility: hidden; }
-      #popup-view, #popup-view * { visibility: visible; }
-      #popup-view { position: absolute; left: 0; top: 0; width: 100%; }
-      @page { size: auto; margin: 0; }
+      body * { visibility: hidden !important; }
+      #print-area, #print-area * { visibility: visible !important; }
+      #print-area { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; background: white; }
+      #print-area img { width: 100vw; height: 100vh; object-fit: contain; }
+      @page { size: A4 landscape; margin: 0; }
+      #print-btn, #reset-btn { display: none !important; }
     }
     """
-    with gr.Blocks(theme=gr.themes.Default(primary_hue="blue"), css=print_css) as app:
+
+    with gr.Blocks(css=css, theme=gr.themes.Default(primary_hue="blue")) as app:
         image_state = gr.State(None)
 
         with gr.Column(elem_id="main-view") as main_view:
-            gr.Markdown(
-                "# Automatic Facial Paralysis Simulator\n"
-                "Look into the camera and click **Generate** to simulate facial paralysis effects."
-            )
+            gr.Markdown("# Facial Paralysis Simulator")
             status_display = gr.Markdown("")
-            with gr.Row(equal_height=True):
-                input_display = gr.Image(
-                    sources=["webcam"],
-                    type="numpy",
-                    label="Input (3×2.3 frame)",
-                    height=520,
-                    width=400,
-                    mirror_webcam=True,
-                )
-                output_display = gr.Image(
-                    type="numpy",
-                    label="Simulated Output (Aligned to print layout)",
-                    height=624,
-                    width=480,
-                )
             with gr.Row():
-                capture_button = gr.Button("Generate")
+                input_display = gr.Image(
+                    sources=["webcam"], type="numpy", mirror_webcam=True, label=None
+                )
+                output_display = gr.Image(type="numpy", label=None)
+            capture_button = gr.Button("Generate")
 
         with gr.Column(visible=False, elem_id="popup-view") as popup_view:
-            gr.Markdown("## Report Preview")
-            report_image_display = gr.Image(label="Final Report", interactive=False)
+            report_image_display = gr.Image(
+                label=None,
+                interactive=False,
+                elem_id="print-area",
+                show_download_button=False,
+                show_label=False,
+                show_share_button=False,
+            )
             with gr.Row():
-                print_button_popup = gr.Button("Print")
-                close_button_popup = gr.Button("Close")
+                print_button = gr.Button("🖨️ Print", elem_id="print-btn")
+                reset_button = gr.Button("↺ Reset", elem_id="reset-btn")
 
         def capture_and_simulate(frame):
             if frame is None:
                 return (gr.update(), gr.update(), None, "Please wait for webcam.")
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            simulated_bgr = simulate(frame_bgr, side="right", severity=0.62, lateral=0.06)
-            if simulated_bgr is None or np.array_equal(frame_bgr, simulated_bgr):
-                return (frame, None, None, "⚠️ No face detected. Try again.")
-            simulated_rgb = cv2.cvtColor(simulated_bgr, cv2.COLOR_BGR2RGB)
-            return (frame, simulated_rgb, (frame, simulated_rgb), "✅ Simulation complete!")
+            bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            sim_bgr = simulate(bgr, side="right", severity=0.62, lateral=0.06)
+            if sim_bgr is None or np.array_equal(sim_bgr, bgr):
+                return (frame, None, None, "⚠️ No face detected.")
+            sim_rgb = cv2.cvtColor(sim_bgr, cv2.COLOR_BGR2RGB)
+            return (frame, sim_rgb, (frame, sim_rgb), "✅ Simulation complete!")
 
         def show_popup(images):
+            # images is either None or (orig_rgb, sim_rgb)
             report_img = generate_report(images)
+            if report_img is None:
+                # show main view again (nothing to preview)
+                return gr.update(visible=True), gr.update(visible=False), None
+            # return final RGB image to Gradio Image (works)
             return gr.update(visible=False), gr.update(visible=True), report_img
 
-        def close_popup():
+        def reset_app():
             return gr.update(visible=True), gr.update(visible=False), None
 
         capture_button.click(
@@ -345,17 +371,15 @@ def build_interface():
             inputs=[image_state],
             outputs=[main_view, popup_view, report_image_display],
         )
-        close_button_popup.click(
-            fn=close_popup,
-            inputs=None,
-            outputs=[main_view, popup_view, report_image_display],
+
+        print_button.click(fn=None, js="() => { window.print(); }")
+        reset_button.click(
+            fn=reset_app, outputs=[main_view, popup_view, report_image_display]
         )
-        print_button_popup.click(fn=None, js="() => { window.print(); }")
-       
 
     return app
 
 
 if __name__ == "__main__":
     app = build_interface()
-    app.launch(server_name="localhost", server_port=7865, share=True)
+    app.launch(server_name="localhost", server_port=7865)
