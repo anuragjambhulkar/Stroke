@@ -30,7 +30,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --no-binary gradio gradio==4.44.1
-          pip install opencv-python mediapipe numpy scipy
+          pip install huggingface_hub==0.24.6 opencv-python mediapipe numpy scipy
 
       - name: Export Gradio App
         run: |
