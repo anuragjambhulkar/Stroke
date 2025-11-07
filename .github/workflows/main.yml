@@ -39,7 +39,8 @@ jobs:
       - name: 🏗️ Export Gradio App to Static Site
         run: |
           mkdir -p build
-          gradio export app.py --outdir build
+          # ✅ New CLI syntax (works on Gradio >=4)
+          gradio export app.py build/
 
       - name: 📤 Upload Artifact for Deployment
         uses: actions/upload-pages-artifact@v3
