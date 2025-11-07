@@ -12,6 +12,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.10"
+  GRADIO_VERSION: "4.44.0"  # ✅ stable version supporting export
 
 jobs:
   build:
@@ -30,17 +31,16 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install gradio==${{ env.GRADIO_VERSION }}
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
-          else
-            pip install gradio opencv-python mediapipe numpy scipy
           fi
 
       - name: 🏗️ Export Gradio App to Static Site
         run: |
           mkdir -p build
-          # ✅ New CLI syntax (works on Gradio >=4)
-          gradio export app.py build/
+          # ✅ Correct export command for Gradio >=4.37
+          gradio export build/ --app app:app
 
       - name: 📤 Upload Artifact for Deployment
         uses: actions/upload-pages-artifact@v3
