@@ -403,4 +403,4 @@ def build_interface():
 
 if __name__ == "__main__":
     app = build_interface()
-    app.launch(server_name="localhost", server_port=7865)
+    app.launch(server_name="localhost", server_port=7865, share=True)
