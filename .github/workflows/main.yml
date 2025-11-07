@@ -43,7 +43,7 @@ jobs:
         run: |
           mkdir -p build
           # ✅ Universal compatible syntax for all modern Gradio versions
-          gradio app.py build
+          gradio test.py build
 
       - name: 📤 Upload Artifact for Deployment
         uses: actions/upload-pages-artifact@v3
