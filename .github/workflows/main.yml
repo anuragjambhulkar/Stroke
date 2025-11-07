@@ -12,7 +12,8 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.10"
-  GRADIO_VERSION: "4.44.0"  # ✅ stable version supporting export
+  GRADIO_VERSION: "4.44.0"
+  HF_HUB_VERSION: "0.24.6"  # ✅ compatible with Gradio 4.44.0
 
 jobs:
   build:
@@ -30,16 +31,18 @@ jobs:
 
       - name: 📦 Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install gradio==${{ env.GRADIO_VERSION }}
+          python -m pip install --upgrade pip setuptools wheel
+          pip install gradio==${{ env.GRADIO_VERSION }} huggingface_hub==${{ env.HF_HUB_VERSION }}
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
+          else
+            pip install opencv-python mediapipe numpy scipy
           fi
 
       - name: 🏗️ Export Gradio App to Static Site
         run: |
           mkdir -p build
-          # ✅ Correct export command for Gradio >=4.37
+          # ✅ Correct export syntax for Gradio 4.x
           gradio export build/ --app app:app
 
       - name: 📤 Upload Artifact for Deployment
