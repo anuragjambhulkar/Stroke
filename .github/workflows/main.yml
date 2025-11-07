@@ -13,7 +13,7 @@ concurrency:
 env:
   PYTHON_VERSION: "3.10"
   GRADIO_VERSION: "4.44.0"
-  HF_HUB_VERSION: "0.24.6"  # ✅ compatible with Gradio 4.44.0
+  HF_HUB_VERSION: "0.24.6"  # fixes HfFolder issue
 
 jobs:
   build:
@@ -42,8 +42,8 @@ jobs:
       - name: 🏗️ Export Gradio App to Static Site
         run: |
           mkdir -p build
-          # ✅ Correct export syntax for Gradio 4.x
-          gradio export build/ --app app:app
+          # ✅ Universal compatible syntax for all modern Gradio versions
+          gradio app.py build
 
       - name: 📤 Upload Artifact for Deployment
         uses: actions/upload-pages-artifact@v3
