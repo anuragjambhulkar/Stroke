@@ -2,73 +2,56 @@ name: Build and Deploy Gradio App to GitHub Pages
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
-concurrency:
-  group: "gradio-pages"
-  cancel-in-progress: false
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
-env:
-  PYTHON_VERSION: "3.10"
-  GRADIO_VERSION: "4.44.0"
-  HF_HUB_VERSION: "0.24.6"  # fixes HfFolder issue
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 🧾 Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 🐍 Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
+          python-version: "3.10"
 
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install gradio==${{ env.GRADIO_VERSION }} huggingface_hub==${{ env.HF_HUB_VERSION }}
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install opencv-python mediapipe numpy scipy
-          fi
+          python -m pip install --upgrade pip
+          pip install --no-binary gradio gradio==4.44.1
+          pip install opencv-python mediapipe numpy scipy
 
-      - name: 🏗️ Export Gradio App to Static Site
+      - name: Export Gradio App
         run: |
           mkdir -p build
-          # ✅ Universal compatible syntax for all modern Gradio versions
-          gradio test.py build
+          gradio export test.py --output-dir build
 
-      - name: 📤 Upload Artifact for Deployment
+      - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          name: gradio-build-artifact
           path: build
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
-
-    permissions:
-      pages: write
-      id-token: write
-
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
-      - name: ⚙️ Setup GitHub Pages
+      - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: 🚀 Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages 🚀
         id: deployment
         uses: actions/deploy-pages@v4
-        with:
-          artifact_name: gradio-build-artifact
